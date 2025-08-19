@@ -9,46 +9,79 @@
 <script>
 (async () => {
   const API_URL = 'https://ikdh2froxk.execute-api.us-east-2.amazonaws.com/default/BK';
+  const API_URL_TEXT = API_URL + '?format=text'; // pedimos texto plano (más fácil de parsear)
   const HARD_CODED_MESSAGE = 'Hola, quiero información por favor.';
 
-  try {
-    const resp = await fetch(API_URL, { method: 'GET', cache: 'no-store', mode: 'cors' });
+  // Fallback proxy CORS (solo para entornos de prueba).
+  // Puedes cambiarlo por otro proxy o quitarlo cuando el backend devuelva CORS correctamente.
+  const CORS_PROXY = 'https://api.allorigins.win/raw?url='; // devuelve el contenido original en raw
 
-    let line = null;
-    try {
-      const j = await resp.clone().json().catch(() => null);
-      if (j) {
-        if (typeof j.line === 'string') line = j.line;
-        else if (typeof j === 'string') line = j;
-      }
-    } catch (e) { }
-
-    if (!line) {
-      try {
-        const txt = await resp.text();
-        if (txt && txt.trim().length) line = txt.trim();
-      } catch (e) { }
-    }
-
-    if (!line) throw new Error('No se recibió ninguna línea válida desde el backend.');
-
-    const digits = line.replace(/\D+/g, '');
-    if (!digits) throw new Error('La línea recibida no contiene dígitos.');
-
-    const encodedMsg = encodeURIComponent(HARD_CODED_MESSAGE);
-    const waUrl = `https://wa.me/${digits}?text=${encodedMsg}`;
-
-    window.location.replace(waUrl);
-
-  } catch (err) {
-    console.error(err);
+  function showError(msg, details) {
+    console.error(msg, details || '');
     document.body.style.fontFamily = 'system-ui, Arial, sans-serif';
     document.body.style.margin = '20px';
-    document.body.innerHTML = '<p>Error al obtener la línea activa: ' + (err.message || '') + '</p>';
-
+    document.body.innerHTML = '<p>Error al obtener la línea activa: ' + (msg || '') + '</p>';
+    if (details) {
+      const d = document.createElement('pre');
+      d.style.whiteSpace = 'pre-wrap';
+      d.textContent = details;
+      document.body.appendChild(d);
+    }
     const info = document.createElement('p');
     info.innerHTML = 'Si quieres probar manualmente, abre la consola del navegador para ver detalles.';
     document.body.appendChild(info);
+
+    // Link manual para depuración
+    const link = document.createElement('p');
+    link.innerHTML = 'Abrir endpoint raw: <a href="' + API_URL_TEXT + '" target="_blank" rel="noopener">' + API_URL_TEXT + '</a>';
+    document.body.appendChild(link);
+  }
+
+  async function fetchText(url, useProxy = false) {
+    const finalUrl = useProxy ? CORS_PROXY + encodeURIComponent(url) : url;
+    const options = { method: 'GET', cache: 'no-store' };
+    // Para previsualizar errores de red, dejamos mode por defecto (no forzamos no-cors)
+    const resp = await fetch(finalUrl, options);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+    return resp.text();
+  }
+
+  function extractDigits(s) {
+    if (!s) return null;
+    const m = s.match(/(\+?\d[\d\s\-\(\)]{6,}\d)/); // intento de extraer número
+    // si match devuelve string con caracteres, limpiamos
+    const candidate = (m ? m[0] : s).replace(/\D+/g, '');
+    return candidate || null;
+  }
+
+  try {
+    // 1) Intento directo (lo correcto: que funcione si backend devuelve CORS headers)
+    try {
+      const txt = await fetchText(API_URL_TEXT, false);
+      const digits = extractDigits(txt);
+      if (!digits) throw new Error('No se encontraron dígitos en la respuesta: ' + txt);
+      const encodedMsg = encodeURIComponent(HARD_CODED_MESSAGE);
+      const waUrl = `https://wa.me/${digits}?text=${encodedMsg}`;
+      return window.location.replace(waUrl);
+    } catch (errDirect) {
+      // 2) Si falla (probablemente CORS), intento con CORS proxy público como fallback
+      console.warn('Fetch directo falló — intentando proxy CORS...', errDirect && errDirect.message);
+      try {
+        const txt2 = await fetchText(API_URL_TEXT, true);
+        const digits2 = extractDigits(txt2);
+        if (!digits2) throw new Error('No se encontraron dígitos en la respuesta proxy: ' + txt2);
+        const encodedMsg2 = encodeURIComponent(HARD_CODED_MESSAGE);
+        const waUrl2 = `https://wa.me/${digits2}?text=${encodedMsg2}`;
+        return window.location.replace(waUrl2);
+      } catch (errProxy) {
+        // 3) Si también falla el proxy -> mostrar error y link manual
+        console.error('Proxy también falló:', errProxy);
+        return showError('Failed to fetch (CORS o red). Se intentó proxy y también falló.', (errProxy && errProxy.message) || errProxy);
+      }
+    }
+
+  } catch (err) {
+    showError(err.message || 'Error desconocido', err);
   }
 })();
 </script>
